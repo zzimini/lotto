@@ -1,0 +1,29 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0b1026;
+  --foreground: #eef1ff;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+}
+
+body {
+  background:
+    radial-gradient(ellipse at top, #1d2a6b 0%, transparent 60%),
+    var(--background);
+  color: var(--foreground);
+  font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+}
+
+/* 뽑힌 공이 결과판에 '퐁' 하고 들어오는 효과 */
+@keyframes ball-pop {
+  0% { transform: translateY(-24px) scale(0.3); opacity: 0; }
+  60% { transform: translateY(2px) scale(1.12); opacity: 1; }
+  100% { transform: translateY(0) scale(1); }
+}
+.ball-pop {
+  animation: ball-pop 420ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
