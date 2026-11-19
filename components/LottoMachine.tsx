@@ -16,8 +16,9 @@ const PICK = 7; // 6개 + 보너스
 // ── 물리 상수 ────────────────────────────────────────────
 const GRAVITY = 900;
 const JET = 4600; // 바닥에서 불어 올리는 바람
-const SWIRL = 2600; // 드럼 안 소용돌이 (접선 방향 힘)
-const TURBULENCE = 1600;
+const KICK_RATE = 3.5; // 공 하나가 1초에 랜덤으로 튕겨지는 평균 횟수
+const KICK_MIN = 450;
+const KICK_MAX = 1150;
 const GUST = 1150; // 순간 돌풍 세기
 const WALL_BOUNCE = 0.82;
 const BALL_BOUNCE = 0.92;
@@ -51,8 +52,6 @@ type Sim = {
   nextPickAt: number;
   drawn: number[];
   power: number; // 0..1 송풍기 출력
-  swirlDir: number; // 소용돌이 방향 (+1 / -1)
-  swirlTimer: number;
   gustTimer: number;
   gust: { x: number; t: number } | null; // 마지막 돌풍 (이펙트용)
 };
@@ -65,8 +64,6 @@ function newSim(): Sim {
     nextPickAt: 0,
     drawn: [],
     power: 0,
-    swirlDir: 1,
-    swirlTimer: 2,
     gustTimer: 0.3,
     gust: null,
   };
@@ -119,12 +116,6 @@ function step(sim: Sim, dt: number) {
   }
 
   if (k > 0) {
-    // 소용돌이 방향이 가끔 뒤집혀서 공들이 확 뒤엉킨다
-    sim.swirlTimer -= dt;
-    if (sim.swirlTimer <= 0) {
-      sim.swirlDir *= -1;
-      sim.swirlTimer = 1.2 + Math.random() * 1.8;
-    }
     // 바닥 랜덤 위치에서 순간 돌풍
     sim.gustTimer -= dt;
     if (sim.gustTimer <= 0) {
@@ -145,18 +136,15 @@ function step(sim: Sim, dt: number) {
   for (const b of inside) {
     b.vy += GRAVITY * dt;
     if (k > 0) {
-      const dx = b.x - CX;
-      const dy = b.y - CY;
-      const d = Math.hypot(dx, dy) || 1;
-      const sw = SWIRL * sim.swirlDir * k * (0.4 + (0.6 * d) / R);
-      b.vx += (-dy / d) * sw * dt;
-      b.vy += (dx / d) * sw * dt;
-      if (b.y > CY + R * 0.1) {
-        b.vy -= JET * k * dt * (0.5 + Math.random());
-        b.vx += (Math.random() - 0.5) * TURBULENCE * 2 * k * dt;
+      // 바닥 송풍
+      if (b.y > CY + R * 0.1) b.vy -= JET * k * dt * (0.5 + Math.random());
+      // 공마다 제각각 랜덤한 방향으로 튕김
+      if (Math.random() < KICK_RATE * k * dt) {
+        const ang = Math.random() * Math.PI * 2;
+        const mag = (KICK_MIN + Math.random() * (KICK_MAX - KICK_MIN)) * k;
+        b.vx += Math.cos(ang) * mag;
+        b.vy += Math.sin(ang) * mag - (b.y > CY ? 300 * k : 0);
       }
-      b.vx += (Math.random() - 0.5) * TURBULENCE * k * dt;
-      b.vy += (Math.random() - 0.5) * TURBULENCE * k * dt;
     } else {
       b.vx *= 0.995;
     }
@@ -303,24 +291,12 @@ function render(ctx: CanvasRenderingContext2D, sim: Sim, time: number) {
   ctx.arc(CX, CY, R, 0, Math.PI * 2);
   ctx.fill();
 
-  // 소용돌이 바람 줄기
+  // 돌풍 기둥
   if (k > 0.05) {
     ctx.save();
     ctx.beginPath();
     ctx.arc(CX, CY, R - 2, 0, Math.PI * 2);
     ctx.clip();
-    ctx.lineCap = "round";
-    const rot = (time / 1000) * 7 * sim.swirlDir;
-    for (let i = 0; i < 7; i++) {
-      const rr = R * (0.35 + 0.09 * i);
-      const a0 = rot * (1.3 - i * 0.08) + i * 2.1;
-      ctx.strokeStyle = `rgba(200,220,255,${0.08 * k + 0.04 * k * (i % 2)})`;
-      ctx.lineWidth = 2 + (i % 3);
-      ctx.beginPath();
-      ctx.arc(CX, CY, rr, a0, a0 + 0.9 + 0.15 * i, sim.swirlDir < 0);
-      ctx.stroke();
-    }
-    // 돌풍 기둥
     if (sim.gust) {
       const g = sim.gust;
       const al = (1 - g.t / 0.35) * 0.35 * k;
