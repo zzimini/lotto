@@ -15,17 +15,21 @@ const PICK = 7; // 6개 + 보너스
 
 // ── 물리 상수 ────────────────────────────────────────────
 const GRAVITY = 900;
-const JET = 3300; // 바닥에서 불어 올리는 바람
-const TURBULENCE = 900;
-const WALL_BOUNCE = 0.75;
-const BALL_BOUNCE = 0.9;
-const MAX_SPEED = 1300;
-const STEP = 1 / 120;
+const JET = 4600; // 바닥에서 불어 올리는 바람
+const SWIRL = 2600; // 드럼 안 소용돌이 (접선 방향 힘)
+const TURBULENCE = 1600;
+const GUST = 1150; // 순간 돌풍 세기
+const WALL_BOUNCE = 0.82;
+const BALL_BOUNCE = 0.92;
+const MAX_SPEED = 1900;
+const STEP = 1 / 240;
+const SPIN_UP = 1.6; // 송풍기 출력이 올라가는 속도 (1/s)
+const SPIN_DOWN = 0.9;
 
 // ── 추첨 타이밍 (ms) ────────────────────────────────────
-const MIX_BEFORE_FIRST = 1800;
+const MIX_BEFORE_FIRST = 2200;
 const BETWEEN_PICKS = 1000;
-const EXTRACT_TIME = 0.75; // s, 공이 출구로 빨려 나가는 시간
+const EXTRACT_TIME = 0.6; // s, 공이 출구로 빨려 나가는 시간
 
 type Ball = {
   n: number;
@@ -46,7 +50,27 @@ type Sim = {
   running: boolean;
   nextPickAt: number;
   drawn: number[];
+  power: number; // 0..1 송풍기 출력
+  swirlDir: number; // 소용돌이 방향 (+1 / -1)
+  swirlTimer: number;
+  gustTimer: number;
+  gust: { x: number; t: number } | null; // 마지막 돌풍 (이펙트용)
 };
+
+function newSim(): Sim {
+  return {
+    balls: makeBalls(),
+    mixing: false,
+    running: false,
+    nextPickAt: 0,
+    drawn: [],
+    power: 0,
+    swirlDir: 1,
+    swirlTimer: 2,
+    gustTimer: 0.3,
+    gust: null,
+  };
+}
 
 type Status = "idle" | "running" | "done";
 
@@ -83,15 +107,56 @@ function makeBalls(): Ball[] {
 function step(sim: Sim, dt: number) {
   const inside = sim.balls.filter((b) => !b.out);
 
+  // 송풍기 출력 램프 업/다운
+  sim.power = sim.mixing
+    ? Math.min(1, sim.power + SPIN_UP * dt)
+    : Math.max(0, sim.power - SPIN_DOWN * dt);
+  const k = sim.power;
+
+  if (sim.gust) {
+    sim.gust.t += dt;
+    if (sim.gust.t > 0.35) sim.gust = null;
+  }
+
+  if (k > 0) {
+    // 소용돌이 방향이 가끔 뒤집혀서 공들이 확 뒤엉킨다
+    sim.swirlTimer -= dt;
+    if (sim.swirlTimer <= 0) {
+      sim.swirlDir *= -1;
+      sim.swirlTimer = 1.2 + Math.random() * 1.8;
+    }
+    // 바닥 랜덤 위치에서 순간 돌풍
+    sim.gustTimer -= dt;
+    if (sim.gustTimer <= 0) {
+      const gx = CX + (Math.random() - 0.5) * R * 1.2;
+      sim.gust = { x: gx, t: 0 };
+      for (const b of inside) {
+        const d = Math.hypot(b.x - gx, b.y - (CY + R));
+        if (d < 110) {
+          const f = (1 - d / 110) * GUST * k;
+          b.vy -= f * (0.7 + Math.random() * 0.6);
+          b.vx += (b.x - gx) * 4 * k + (Math.random() - 0.5) * 300 * k;
+        }
+      }
+      sim.gustTimer = 0.18 + Math.random() * 0.35;
+    }
+  }
+
   for (const b of inside) {
     b.vy += GRAVITY * dt;
-    if (sim.mixing) {
-      if (b.y > CY + R * 0.15) {
-        b.vy -= JET * dt * (0.5 + Math.random());
-        b.vx += (Math.random() - 0.5) * TURBULENCE * 2 * dt;
+    if (k > 0) {
+      const dx = b.x - CX;
+      const dy = b.y - CY;
+      const d = Math.hypot(dx, dy) || 1;
+      const sw = SWIRL * sim.swirlDir * k * (0.4 + (0.6 * d) / R);
+      b.vx += (-dy / d) * sw * dt;
+      b.vy += (dx / d) * sw * dt;
+      if (b.y > CY + R * 0.1) {
+        b.vy -= JET * k * dt * (0.5 + Math.random());
+        b.vx += (Math.random() - 0.5) * TURBULENCE * 2 * k * dt;
       }
-      b.vx += (Math.random() - 0.5) * TURBULENCE * dt;
-      b.vy += (Math.random() - 0.5) * TURBULENCE * dt;
+      b.vx += (Math.random() - 0.5) * TURBULENCE * k * dt;
+      b.vy += (Math.random() - 0.5) * TURBULENCE * k * dt;
     } else {
       b.vx *= 0.995;
     }
@@ -200,6 +265,13 @@ function drawBall(ctx: CanvasRenderingContext2D, x: number, y: number, n: number
 
 function render(ctx: CanvasRenderingContext2D, sim: Sim, time: number) {
   ctx.clearRect(0, 0, W, H);
+  const k = sim.power;
+
+  // 기계 진동
+  ctx.save();
+  if (k > 0) {
+    ctx.translate((Math.random() - 0.5) * 3 * k, (Math.random() - 0.5) * 2.4 * k);
+  }
 
   // 받침대
   const baseTop = CY + R - 10;
@@ -217,7 +289,7 @@ function render(ctx: CanvasRenderingContext2D, sim: Sim, time: number) {
   ctx.fillStyle = "#11163d";
   ctx.fillRect(CX - 140, H - 16, 280, 12);
   // 송풍구 불빛
-  ctx.fillStyle = sim.mixing ? `rgba(255,214,90,${0.6 + 0.4 * Math.sin(time / 80)})` : "#2c3570";
+  ctx.fillStyle = k > 0 ? `rgba(255,214,90,${(0.6 + 0.4 * Math.sin(time / 50)) * Math.max(0.3, k)})` : "#2c3570";
   ctx.beginPath();
   ctx.arc(CX, baseTop + 32, 7, 0, Math.PI * 2);
   ctx.fill();
@@ -231,6 +303,42 @@ function render(ctx: CanvasRenderingContext2D, sim: Sim, time: number) {
   ctx.arc(CX, CY, R, 0, Math.PI * 2);
   ctx.fill();
 
+  // 소용돌이 바람 줄기
+  if (k > 0.05) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(CX, CY, R - 2, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.lineCap = "round";
+    const rot = (time / 1000) * 7 * sim.swirlDir;
+    for (let i = 0; i < 7; i++) {
+      const rr = R * (0.35 + 0.09 * i);
+      const a0 = rot * (1.3 - i * 0.08) + i * 2.1;
+      ctx.strokeStyle = `rgba(200,220,255,${0.08 * k + 0.04 * k * (i % 2)})`;
+      ctx.lineWidth = 2 + (i % 3);
+      ctx.beginPath();
+      ctx.arc(CX, CY, rr, a0, a0 + 0.9 + 0.15 * i, sim.swirlDir < 0);
+      ctx.stroke();
+    }
+    // 돌풍 기둥
+    if (sim.gust) {
+      const g = sim.gust;
+      const al = (1 - g.t / 0.35) * 0.35 * k;
+      const grad = ctx.createLinearGradient(0, CY + R, 0, CY + R - 160);
+      grad.addColorStop(0, `rgba(255,230,150,${al})`);
+      grad.addColorStop(1, "rgba(255,230,150,0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.moveTo(g.x - 22, CY + R);
+      ctx.lineTo(g.x + 22, CY + R);
+      ctx.lineTo(g.x + 40, CY + R - 160);
+      ctx.lineTo(g.x - 40, CY + R - 160);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
   // 출구 관
   ctx.fillStyle = "rgba(170,190,255,0.18)";
   ctx.strokeStyle = "rgba(210,220,255,0.55)";
@@ -239,6 +347,24 @@ function render(ctx: CanvasRenderingContext2D, sim: Sim, time: number) {
   ctx.rect(CX - BR - 5, CY - R - 66, (BR + 5) * 2, 70);
   ctx.fill();
   ctx.stroke();
+
+  // 잔상 (빠른 공일수록 길게)
+  for (const b of sim.balls) {
+    if (b.out) continue;
+    const sp = Math.hypot(b.vx, b.vy);
+    if (sp < 350) continue;
+    const [base] = ballColors(b.n);
+    const len = Math.min(1, (sp - 350) / 1200);
+    for (let i = 1; i <= 3; i++) {
+      const f = i * 0.012;
+      ctx.globalAlpha = 0.22 * len * (1 - i / 4);
+      ctx.fillStyle = base;
+      ctx.beginPath();
+      ctx.arc(b.x - b.vx * f, b.y - b.vy * f, BR * (1 - i * 0.1), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
 
   // 공들
   for (const b of sim.balls) {
@@ -268,6 +394,22 @@ function render(ctx: CanvasRenderingContext2D, sim: Sim, time: number) {
   ctx.arc(CX, CY, R - 18, Math.PI * 1.45, Math.PI * 1.52);
   ctx.stroke();
   ctx.lineCap = "butt";
+
+  // 공이 출구로 빨려 나갈 때 번쩍
+  const picked = sim.balls.find((b) => b.out);
+  if (picked) {
+    const p = Math.min(1, picked.t / EXTRACT_TIME);
+    const exitY = CY - R;
+    const glow = ctx.createRadialGradient(CX, exitY, 0, CX, exitY, 30 + 50 * p);
+    glow.addColorStop(0, `rgba(255,235,150,${0.7 * (1 - p)})`);
+    glow.addColorStop(1, "rgba(255,235,150,0)");
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(CX, exitY, 30 + 50 * p, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
 }
 
 function ResultBall({ n, small }: { n: number; small?: boolean }) {
@@ -305,7 +447,7 @@ export default function LottoMachine() {
     canvas.height = H * dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    const sim: Sim = { balls: makeBalls(), mixing: false, running: false, nextPickAt: 0, drawn: [] };
+    const sim = newSim();
     simRef.current = sim;
 
     let raf = 0;
@@ -317,7 +459,11 @@ export default function LottoMachine() {
       last = now;
       while (acc >= STEP) {
         step(sim, STEP);
-        for (const b of sim.balls) if (b.out) b.t += STEP;
+        for (const b of sim.balls)
+          if (b.out) {
+            b.t += STEP;
+            b.a += STEP * 18; // 빨려 나가며 팽그르르
+          }
         acc -= STEP;
       }
 
